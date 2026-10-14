@@ -1,0 +1,23 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/
+media/
+sessions/
+sources.json
+evidence/
+.impeccable/review/
+
+# Credentials and local generated artifacts
+.env.*
+!.env.example
+*.session
+*.session-*
+*.sqlite*
+*.db
+.ruff_cache/
+.pytest_cache/
+*.zip
+.impeccable/
+STITCH_GUIDE.txt

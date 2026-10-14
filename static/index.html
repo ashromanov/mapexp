@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0f5e66" />
+    <title>MapExp — события города</title>
+    <link rel="stylesheet" href="/static/vendor/leaflet.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=geo3" />
+    <script defer src="/static/vendor/leaflet.js"></script>
+    <script type="module" src="/static/app.js?v=geo3"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="MapExp — главная"
+        ><span class="brand-mark" data-icon="map"></span
+        ><strong>MapExp</strong></a
+      ><span id="city" class="city">Пермь</span
+      ><span class="tagline">Карта происшествий</span>
+      <div class="header-actions">
+        <span id="connection" class="connection" role="status"
+          >Подключение…</span
+        ><button id="help-button" class="button" data-icon="help">
+          Как это работает
+        </button>
+      </div>
+    </header>
+    <main class="workspace">
+      <section class="map-area" aria-label="Карта событий">
+        <div id="map"></div>
+        <div id="map-error" class="map-error" hidden>
+          <span data-icon="map"></span>
+          <h2>Карта недоступна</h2>
+          <p>События и сообщения доступны в ленте.</p>
+          <button id="map-retry" class="button">
+            Повторить загрузку карты
+          </button>
+        </div>
+        <nav class="map-controls" aria-label="Управление картой">
+          <button
+            id="zoom-in"
+            class="icon-button"
+            aria-label="Приблизить"
+            data-icon="plus"
+          ></button
+          ><button
+            id="zoom-out"
+            class="icon-button"
+            aria-label="Отдалить"
+            data-icon="minus"
+          ></button
+          ><button
+            id="fit-map"
+            class="icon-button"
+            aria-label="Показать все события"
+            data-icon="fit"
+          ></button
+          ><button
+            id="locate"
+            class="icon-button"
+            aria-label="Показать моё местоположение"
+            data-icon="locate"
+          ></button>
+        </nav>
+        <div id="map-notice" class="map-notice" role="status" hidden></div>
+        <div class="legend">
+          <strong>Важность событий</strong
+          ><span><i class="dot critical"></i>Высокая опасность</span
+          ><span><i class="dot danger"></i>Опасность</span
+          ><span><i class="dot warning"></i>Предупреждение</span
+          ><span><i class="dot info"></i>Информация</span
+          ><span>Пунктирный круг — примерная область</span>
+        </div>
+      </section>
+      <aside id="sidebar" class="sidebar" aria-label="Лента событий">
+        <div id="sheet-handle" class="sheet-handle">
+          <button id="sheet-toggle" aria-label="Развернуть ленту событий">
+            <span></span>
+          </button>
+        </div>
+        <div id="feed-tools" class="feed-tools">
+          <div class="feed-heading">
+            <h1>События города</h1>
+            <span id="count" class="count">Загрузка…</span
+            ><button
+              id="expand-feed"
+              class="icon-button mobile-only"
+              aria-label="Развернуть ленту"
+              data-icon="expand"
+            ></button>
+          </div>
+          <div class="search-field">
+            <span data-icon="search"></span
+            ><input
+              id="search"
+              type="search"
+              aria-label="Поиск по событиям и месту"
+              placeholder="Поиск по событиям и месту"
+            /><button
+              id="filter-shortcut"
+              class="icon-button"
+              aria-label="Открыть фильтры"
+              data-icon="sliders"
+            ></button>
+          </div>
+          <div id="categories" class="categories" aria-label="Категории"></div>
+          <div class="filter-row">
+            <button id="filter-button" class="button" data-icon="filter">
+              Фильтры</button
+            ><span id="filter-summary">Все уровни · Все места</span>
+          </div>
+        </div>
+        <div id="stream-notice" class="inline-notice" hidden>
+          Связь прервана. Показаны последние загруженные события.
+        </div>
+        <button id="new-events" class="new-events" hidden>
+          Показать обновления
+        </button>
+        <div id="feed" class="feed" tabindex="-1" aria-label="События"></div>
+        <section
+          id="detail"
+          class="detail"
+          hidden
+          tabindex="-1"
+          aria-label="Подробности события"
+        ></section>
+        <div class="freshness" id="freshness">Проверяем свежесть данных…</div>
+      </aside>
+    </main>
+    <dialog id="filters" class="dialog">
+      <form method="dialog">
+        <div class="dialog-heading">
+          <h2>Фильтры событий</h2>
+          <button
+            class="icon-button"
+            value="cancel"
+            aria-label="Закрыть фильтры"
+            data-icon="close"
+          ></button>
+        </div>
+        <fieldset>
+          <legend>Важность</legend>
+          <label
+            ><input type="radio" name="severity" value="all" checked />Все
+            уровни</label
+          ><label
+            ><input type="radio" name="severity" value="critical" />Высокая
+            опасность</label
+          ><label
+            ><input
+              type="radio"
+              name="severity"
+              value="danger"
+            />Опасность</label
+          ><label
+            ><input
+              type="radio"
+              name="severity"
+              value="warning"
+            />Предупреждение</label
+          ><label
+            ><input
+              type="radio"
+              name="severity"
+              value="info"
+            />Информация</label
+          >
+        </fieldset>
+        <fieldset>
+          <legend>Местоположение</legend>
+          <label
+            ><input type="radio" name="location" value="all" checked />Все
+            события</label
+          ><label
+            ><input type="radio" name="location" value="mapped" />С точкой на
+            карте</label
+          ><label
+            ><input type="radio" name="location" value="unknown" />Без точки на
+            карте</label
+          >
+        </fieldset>
+        <div class="dialog-actions">
+          <button id="reset-filters" type="button" class="button">
+            Сбросить</button
+          ><button id="apply-filters" value="apply" class="button primary">
+            Показать события
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="help" class="dialog">
+      <div class="dialog-heading">
+        <h2>Как работает MapExp</h2>
+        <form method="dialog">
+          <button
+            class="icon-button"
+            aria-label="Закрыть справку"
+            data-icon="close"
+          ></button>
+        </form>
+      </div>
+      <p>
+        Мы собираем публичные сообщения из городских Telegram-каналов и
+        объединяем сообщения об одном происшествии.
+      </p>
+      <p>
+        Краткое описание помогает сориентироваться. Оригинальные сообщения,
+        обновления и вложения доступны в карточке события.
+      </p>
+      <h3>Точка — не всегда точный адрес</h3>
+      <p>
+        Круг на карте обозначает приблизительную область. Если место не удалось
+        установить, событие остаётся в ленте без точки.
+      </p>
+      <h3>Проверяйте первоисточник</h3>
+      <p>
+        Сообщения каналов могут быть неполными или содержать ошибки. MapExp не
+        является экстренной службой. В экстренной ситуации звоните
+        <a href="tel:112">112</a>.
+      </p>
+      <p>
+        Статус подключения относится к обновлению страницы. Время обработки
+        источников показано отдельно внизу ленты.
+      </p>
+    </dialog>
+  </body>
+</html>

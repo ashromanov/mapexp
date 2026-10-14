@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-labelledby="title desc">
+<title id="title">MapExp</title><desc id="desc">Evidence-grounded incident intelligence. Telegram reports become typed decisions and mapped incidents.</desc>
+<rect width="1280" height="360" fill="#e9f3f3"/>
+<path d="M790 0v360M1010 0v360M0 300h1280" stroke="#bfc8ca"/>
+<g font-family="Manrope,DejaVu Sans,sans-serif" fill="#17232b">
+<text x="60" y="128" font-size="84" font-weight="700" letter-spacing="-3">MapExp<tspan fill="#0f5e66">.</tspan></text>
+<text x="64" y="185" font-size="26">Evidence-grounded</text><text x="64" y="225" font-size="26">incident intelligence.</text>
+<text x="64" y="336" font-size="16" fill="#0f5e66">TELEGRAM → TYPED DECISIONS → STRUCTURED INCIDENTS</text>
+</g>
+<g fill="none" stroke="#8fb5b7" stroke-width="2">
+<path d="M820 40h150v80H850v110h120v40M1040 45h190v95h-150v100h160M850 120h-35M970 120h40M1010 240h70"/>
+<circle cx="910" cy="170" r="48" stroke-dasharray="6 7"/><circle cx="1130" cy="185" r="66" stroke-dasharray="6 7"/>
+</g>
+<circle cx="910" cy="170" r="9" fill="#0f5e66"/><circle cx="1130" cy="185" r="9" fill="#2457a7"/>
+<g font-family="Manrope,DejaVu Sans,sans-serif" font-size="14" fill="#53636d"><text x="819" y="336">SOURCE EVIDENCE</text><text x="1038" y="336">HONEST UNCERTAINTY</text></g>
+</svg>

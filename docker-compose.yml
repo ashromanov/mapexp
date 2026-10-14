@@ -1,0 +1,41 @@
+services:
+  web:
+    build: .
+    command: ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    ports:
+      - "127.0.0.1:8010:8000"
+    volumes:
+      - ./data:/app/data
+      - ./media:/app/media
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  ingest:
+    build: .
+    command: ["python", "ingest.py", "--watch", "--recent-hours", "36"]
+    env_file: .env
+    environment:
+      TG_API_ID: ${TG_API_ID:?export TG_API_ID}
+      TG_API_HASH: ${TG_API_HASH:?export TG_API_HASH}
+      TG_SESSION: /app/sessions/${TG_SESSION_NAME:-mapexp}
+    volumes:
+      - ./data:/app/data
+      - ./media:/app/media
+      - ${TG_SESSION_DIR:-./sessions}:/app/sessions
+      - ./sources.json:/app/sources.json:ro
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: ["tunnel", "--no-autoupdate", "--protocol", "http2", "--url", "http://web:8000"]
+    profiles: ["share"]
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
