@@ -1,4 +1,4 @@
-"""Explicit Jev judgments around a bounded, evidence-grounded text synthesis."""
+"""Explicit typed judgments around a bounded, evidence-grounded text synthesis."""
 
 from __future__ import annotations
 
@@ -131,11 +131,11 @@ def _retry_after(value: str | None) -> float:
 def validate_answers(data: dict, questions: dict) -> dict:
     answers = data.get("answers")
     if not isinstance(answers, dict):
-        raise ProviderFailure("Jev response has no typed answers")
+        raise ProviderFailure("Decision model response has no typed answers")
     for name, question in questions.items():
         answer = answers.get(name)
         if not isinstance(answer, dict) or answer.get("type") != question["type"]:
-            raise ProviderFailure(f"Jev returned invalid answer type: {name}")
+            raise ProviderFailure(f"Decision model returned invalid answer type: {name}")
         if question["type"] == "noul":
             numbers = [answer.get("noul")]
         else:
@@ -143,9 +143,9 @@ def validate_answers(data: dict, questions: dict) -> dict:
             if answer.get("choice") not in question["criteria"] or not isinstance(
                 probabilities, dict
             ):
-                raise ProviderFailure(f"Jev returned unknown choice: {name}")
+                raise ProviderFailure(f"Decision model returned unknown choice: {name}")
             if set(probabilities) != set(question["criteria"]):
-                raise ProviderFailure(f"Jev returned incomplete options: {name}")
+                raise ProviderFailure(f"Decision model returned incomplete options: {name}")
             numbers = [answer.get("confidence"), *probabilities.values()]
         if any(
             isinstance(v, bool)
@@ -154,12 +154,12 @@ def validate_answers(data: dict, questions: dict) -> dict:
             or not 0 <= v <= 1
             for v in numbers
         ):
-            raise ProviderFailure(f"Jev returned invalid probabilities: {name}")
+            raise ProviderFailure(f"Decision model returned invalid probabilities: {name}")
         if (
             question["type"] == "choice"
             and abs(sum(probabilities.values()) - 1) > 0.025
         ):
-            raise ProviderFailure(f"Jev returned invalid distribution: {name}")
+            raise ProviderFailure(f"Decision model returned invalid distribution: {name}")
     return answers
 
 
@@ -182,22 +182,22 @@ def jev(state: dict, questions: dict, audit: list[dict]) -> dict:
                 },
             )
     except httpx.HTTPError as exc:
-        raise ProviderFailure(f"Jev transport failed: {type(exc).__name__}") from exc
+        raise ProviderFailure(f"Decision model transport failed: {type(exc).__name__}") from exc
     if response.status_code in {401, 402, 403}:
         raise LLMBlocked(
-            f"Jev account unavailable: HTTP {response.status_code}",
+            f"Decision model account unavailable: HTTP {response.status_code}",
             _retry_after(response.headers.get("retry-after")),
         )
     if not response.is_success:
         raise ProviderFailure(
-            f"Jev request failed: HTTP {response.status_code}",
+            f"Decision model request failed: HTTP {response.status_code}",
             _retry_after(response.headers.get("retry-after")),
         )
     try:
         data = response.json()
         answers = validate_answers(data, questions)
     except (ValueError, TypeError) as exc:
-        raise ProviderFailure("Jev returned malformed JSON") from exc
+        raise ProviderFailure("Decision model returned malformed JSON") from exc
     audit.append(
         {
             "stage": list(questions),
@@ -832,7 +832,7 @@ def _decide(post: dict, audit: list[dict]) -> EventDecision:
         or (generated.location_query is not None and selected is None),
         reason="Verbatim attributed source after summary verification"
         if quoted_source
-        else "Source-supported incident; Jev identity and novelty judgments",
+        else "Source-supported incident; Decision model identity and novelty judgments",
         audit={
             "revision": post["revision"],
             "calls": audit,

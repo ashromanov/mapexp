@@ -52,10 +52,10 @@ class Settings:
         default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""), repr=False
     )
     text_model: str = field(
-        default_factory=lambda: os.getenv("OPENROUTER_MODEL", "openai/gpt-5.6-luna-pro")
+        default_factory=lambda: os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4.1-flash-1017")
     )
     decision_model: str = field(
-        default_factory=lambda: os.getenv("JEV_MODEL", "typesafe/jev-1.13")
+        default_factory=lambda: os.getenv("JEV_MODEL", "perplexity/pplx-decider-v1.2")
     )
     geocoder_agent: str = field(
         default_factory=lambda: os.getenv("GEOCODER_USER_AGENT", "MapExp/1.0")

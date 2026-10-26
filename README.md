@@ -33,17 +33,17 @@ MapExp handles those decisions explicitly, rather than treating generated prose 
 
 ## The LLM pipeline
 
-Two model roles sit inside a deterministic Python workflow. **Jev** answers bounded questions; a **text LLM** extracts evidence and drafts a structured summary. Application code validates their outputs and commits the result.
+Two model roles sit inside a deterministic Python workflow. **Decider** answers bounded questions; a **text LLM** extracts evidence and drafts a structured summary. Application code validates their outputs and commits the result.
 
 ```mermaid
 flowchart TD
-    P["Telegram post + revision"] --> T["Jev · relevance, category, severity"]
+    P["Telegram post + revision"] --> T["Decider · relevance, category, severity"]
     T -->|clearly irrelevant| I["Ignore · keep deduplication fingerprint"]
     T -->|candidate incident| R["SQLite FTS5 · recent incident candidates"]
-    R --> M["Jev · same incident or new?"]
+    R --> M["Decider · same incident or new?"]
     M --> D["Text LLM · strict JSON draft"]
     D --> G["Quoted place evidence → scoped geocoders"]
-    G --> V["Jev · facts, local scope, novelty, location"]
+    G --> V["Decider · facts, local scope, novelty, location"]
     V -->|supported| C["Validated SQLite transaction"]
     V -->|unsupported prose| F["One repair draft + verification"]
     F -->|supported| C
@@ -59,18 +59,18 @@ flowchart TD
 
 | Stage | What happens | Why it matters |
 | :--- | :--- | :--- |
-| **Triage** | Jev scores local relevance and chooses an incident category and severity. | Plausible preliminary reports can survive; severity describes reported impact, not factual certainty. |
-| **Entity resolution** | FTS5 retrieves up to eight active candidates from the last seven days; Jev selects the same physical incident or `new`. | Shared streets or categories alone do not justify merging. |
+| **Triage** | Decider scores local relevance and chooses an incident category and severity. | Plausible preliminary reports can survive; severity describes reported impact, not factual certainty. |
+| **Entity resolution** | FTS5 retrieves up to eight active candidates from the last seven days; Decider selects the same physical incident or `new`. | Shared streets or categories alone do not justify merging. |
 | **Structured synthesis** | The text model returns an `EventDraft` using strict JSON Schema, then Pydantic validates it. | Required fields, enums, length limits, and forbidden extra fields constrain the output. |
-| **Spatial grounding** | An exact source quote must support the location query before geographically scoped Photon/Nominatim lookups run. Jev judges the candidates. | The model never supplies coordinates. Unknown or city-only locations stay in the feed without a marker. |
-| **Verification** | Jev checks factual support, local scope, new facts, and location evidence. Unsupported prose gets one repair attempt. | Generation and acceptance are separate decisions, with a bounded fallback. |
+| **Spatial grounding** | An exact source quote must support the location query before geographically scoped Photon/Nominatim lookups run. Decider judges the candidates. | The model never supplies coordinates. Unknown or city-only locations stay in the feed without a marker. |
+| **Verification** | Decider checks factual support, local scope, new facts, and location evidence. Unsupported prose gets one repair attempt. | Generation and acceptance are separate decisions, with a bounded fallback. |
 | **Persistence** | Python applies validated decisions against the expected post revision. | Stale decisions cannot consume a newer edit; accepted evidence remains available. |
 
 ### Bounded retrieval, rather than an autonomous agent
 
 The matching context is deliberately small: lexical retrieval over recent incidents, followed by up to twelve accepted source messages from the selected event. Comments are excluded from that synthesis evidence. There is no embedding index, vector database, fine-tuning pipeline, or model-controlled tool execution.
 
-The implementation uses `typesafe/jev-1.13` through the OpenRouter alpha decisions endpoint, plus a configurable text model through its OpenAI-compatible API. The checked-in text-model default is `openai/gpt-5.6-luna-pro`; availability depends on the provider and account. Both model IDs are environment settings.
+The implementation uses `perplexity/pplx-decider-v1.2` through the OpenRouter alpha decisions endpoint, plus a configurable text model through its OpenAI-compatible API. The checked-in text-model default is `deepseek/deepseek-v4.1-flash-1017`; availability depends on the provider and account. Both model IDs are environment settings.
 
 ### What makes this an ML/LLM engineering project
 
@@ -130,7 +130,7 @@ For a meaningful next evaluation, label independent examples of relevance, event
 ```mermaid
 flowchart LR
     TG["Allowlisted Telegram channels"] --> IN["Single Telethon worker"]
-    IN <-->|typed decisions + JSON drafts| ML["OpenRouter · Jev + text LLM"]
+    IN <-->|typed decisions + JSON drafts| ML["OpenRouter · Decider + text LLM"]
     IN <-->|quoted place lookup| GEO["Photon / Nominatim"]
     IN --> DB[("SQLite · WAL + FTS5")]
     IN --> FILES["Local media"]

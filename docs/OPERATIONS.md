@@ -11,7 +11,7 @@ Copy `.env.example` and `sources.json.example` only in a new checkout. Preserve 
 | `TG_API_ID`, `TG_API_HASH` | Telegram application credentials. |
 | `TG_SESSION` | Existing authorized Telethon session path (with or without `.session`). |
 | `OPENROUTER_API_KEY` | Shared authentication for decisions and text synthesis. |
-| `JEV_MODEL`, `OPENROUTER_MODEL` | Decision and text model IDs. |
+| `JEV_MODEL`, `OPENROUTER_MODEL` | Decision and text model IDs. Current defaults: `perplexity/pplx-decider-v1.2` and `deepseek/deepseek-v4.1-flash-1017`. `JEV_MODEL` retains its historical variable name. |
 | `CITY_NAME`, `CITY_TIMEZONE`, `CITY_LAT`, `CITY_LON`, `CITY_ZOOM` | City scope, display timezone, and initial map. Set `Asia/Yekaterinburg` for Perm; the current example defaults to `Europe/Moscow`. |
 | `DATABASE_PATH`, `MEDIA_DIR` | Local persistent storage. |
 | `GEOCODER_USER_AGENT` | Identifying user agent with a real operator contact for public Nominatim. |
