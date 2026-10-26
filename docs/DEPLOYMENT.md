@@ -5,6 +5,41 @@ GitHub hosts the repository, Actions pipeline and container registry. The Python
 API and Telegram worker run on an existing Ubuntu VPS, behind its existing Caddy
 service. GitHub Pages does not run the backend.
 
+## Production reference (verified 2026-10-26)
+
+| Item | Current value |
+| --- | --- |
+| Repository / deployment branch | `git@github.com:ashromanov/mapexp.git` / `main` |
+| Public map | https://mapexp.2-26-150-51.sslip.io |
+| VPS / SSH | `2.26.150.51:22`, Ubuntu 26.04; operator login `root`, CI login `mapexp-deploy` |
+| Resources | 1 vCPU, approximately 2 GiB RAM |
+| Runtime | Docker Compose project `mapexp`, containers `mapexp-web-1` and `mapexp-ingest-1` |
+| Persistent root | `/srv/mapexp` |
+| Reverse proxy | Caddy, `/etc/caddy/mapexp.caddy` → `127.0.0.1:8010` |
+| Text model, `OPENROUTER_MODEL` | `deepseek/deepseek-v4.1-flash-1017` |
+| Decision model, `JEV_MODEL` | `perplexity/pplx-decider-v1.2` (historical variable name) |
+| City | Пермь; `Asia/Yekaterinburg`; center `58.0105, 56.2502`, zoom `11` |
+| Sources | `chp_59_perm`, `chp_159_59`; authoritative list in `/srv/mapexp/sources.json` |
+| Collection | One worker, `--watch --recent-hours 168`, polling every 30 seconds |
+
+GitHub Actions is the active deployment system; GitLab is not used. The old
+`191.96.11.55` address is not the deployed MapExp server. Existing VPN/Xray and
+Caddy services share this VPS, so preserve their configuration during maintenance.
+The retired `MapExp-fast-render` worktree was removed; develop in the main MapExp
+repository.
+
+Operator SSH from the existing workstation (the private key stays outside Git):
+
+```bash
+ssh -i ~/.ssh/vpn_primary_ed25519 -o IdentitiesOnly=yes \
+  -o BatchMode=yes -o StrictHostKeyChecking=yes root@2.26.150.51
+```
+
+The model-switch release was `b27515996db83a24e2f1f1019de049f0632a0567`, verified
+by [successful CI and production deployment](https://github.com/ashromanov/mapexp/actions/runs/40366702885).
+This is a historical reference, not a pin: query `/healthz` and `current` for the
+release actually running now.
+
 ## Pipeline
 
 `.github/workflows/deploy.yml` runs on pushes to `main`, pull requests and manual
@@ -59,10 +94,10 @@ The `production` GitHub environment contains these non-secret variables:
 
 | Name | Meaning |
 | --- | --- |
-| `DEPLOY_HOST` | VPS SSH address |
+| `DEPLOY_HOST` | `2.26.150.51` |
 | `DEPLOY_USER` | Dedicated `mapexp-deploy` account |
-| `DEPLOY_PORT` | SSH port |
-| `DEPLOY_URL` | Public HTTPS URL |
+| `DEPLOY_PORT` | `22` |
+| `DEPLOY_URL` | `https://mapexp.2-26-150-51.sslip.io` |
 
 It contains only two deployment secrets:
 
@@ -107,6 +142,45 @@ MAPEXP_ROOT=/srv/mapexp MAPEXP_REVISION="$mapexp_revision" \
 
 ## Operations
 
+### Ship a code update
+
+Commit and push to `main`; the pipeline tests, publishes and deploys automatically.
+Use the Actions page to follow the release; a successful push alone does not mean
+production has updated. Manual reruns are also available:
+
+```bash
+gh run list --workflow deploy.yml --limit 5
+gh workflow run deploy.yml --ref main
+```
+
+### Change models or other private runtime settings
+
+Edit `/srv/mapexp/.env` on the VPS, preserving its credentials and private file
+permissions. Server environment values override image defaults; editing
+`settings.py` or the example env files alone does not override the production env.
+A container restart does not reload its environment: recreate ingestion after an
+env change, or let the next normal deployment recreate it. For an env-only change,
+run this on the VPS, serialized with deployments:
+
+```bash
+(
+  flock -x 9
+  export MAPEXP_ROOT=/srv/mapexp
+  export MAPEXP_IMAGE
+  MAPEXP_IMAGE=$(cat /srv/mapexp/current/.image)
+  docker compose --project-name mapexp --env-file /srv/mapexp/.env \
+    -f /srv/mapexp/current/compose.production.yml \
+    up -d --force-recreate --wait --wait-timeout 180 ingest
+) 9>/srv/mapexp/.deploy.lock
+```
+
+This command applies ingestion settings; city settings supplied to `web` also
+require recreating `web` or a normal deployment. Never start another worker against
+the production database/session. Changing models affects subsequent processing;
+it does not automatically regenerate existing cards.
+
+### Check the deployed service
+
 ```bash
 # Public deployment smoke check; optionally add --expected-revision COMMIT_SHA.
 python tools/smoke_http.py https://mapexp.2-26-150-51.sslip.io
@@ -114,7 +188,17 @@ python tools/smoke_http.py https://mapexp.2-26-150-51.sslip.io
 docker ps --filter label=com.docker.compose.project=mapexp
 curl -fsS http://127.0.0.1:8010/healthz
 curl -fsS http://127.0.0.1:8010/api/status
+readlink -f /srv/mapexp/current
+docker logs --tail 50 mapexp-ingest-1
+# Print only effective model IDs, never the complete environment:
+docker exec mapexp-ingest-1 python -c \
+  'from settings import settings; print(settings.text_model); print(settings.decision_model)'
 ```
+
+In `/api/status`, check `connected`, a fresh `heartbeat`, `provider_blocked`,
+`pending`, `errors` and `last_error`. A healthy HTTP container does not prove that
+Telegram collection or model calls work. The browser receives SSE update signals;
+new cards appear when the user applies the update prompt or reloads the page.
 
 Check workflow results at https://github.com/ashromanov/mapexp/actions.
 Back up the SQLite database using its online backup API and preserve matching media,

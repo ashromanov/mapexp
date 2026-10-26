@@ -152,6 +152,11 @@ Two processes, one database, no frontend build step. The worker owns ingestion, 
 
 ## Hosting and CI/CD
 
+Live map: **https://mapexp.2-26-150-51.sslip.io**. Pushes to `main` deploy through
+[GitHub Actions](https://github.com/ashromanov/mapexp/actions). The
+[production reference and runbook](docs/DEPLOYMENT.md#production-reference-verified-2026-10-26)
+records the VPS address, SSH access, model settings, runtime paths and maintenance commands.
+
 The application runs on an Ubuntu VPS, with GitHub Actions testing each update and deploying tested container images from GHCR. SQLite, source configuration, media, provider keys and Telegram sessions persist outside the image. See [deployment and recovery](docs/DEPLOYMENT.md), [delivery scaling](docs/SCALING.md), and [rendering](docs/RENDERING.md).
 
 ## Run it locally
