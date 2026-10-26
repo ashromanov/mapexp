@@ -11,3 +11,12 @@ sources.json
 .impeccable/
 tests/
 evidence/
+
+.env.*
+!.env.example
+*.session
+*.session-*
+*.sqlite*
+*.db
+.ruff_cache/
+.pytest_cache/

@@ -1,8 +1,9 @@
 import {
   kinds,
   severity,
-  locationSummary,
+  locationSummary as summarizeLocation,
   locationConfidence,
+  locationNotice,
   uncertaintyRadius,
   colors,
   mapped,
@@ -12,8 +13,30 @@ import {
   safeTelegram,
   safeMedia,
   escapeHTML as esc,
-} from "./ui.mjs?v=geo3";
-const $ = (s) => document.querySelector(s);
+} from "./ui.mjs?v=recall2";
+// Resolve stable UI nodes once; dynamic detail nodes are deliberately not cached.
+const ui = new Map([...document.querySelectorAll('[id]')].map((el) => ['#' + el.id, el]));
+const $ = (s) => ui.get(s) || document.querySelector(s);
+const cardTemplate = $('#event-card');
+const cards = new Map();
+const markerEvents = new Map();
+const iconCache = new Map();
+const locationLabels = new WeakMap();
+function locationSummary(event) {
+  let label = locationLabels.get(event);
+  if (label === undefined) {
+    label = summarizeLocation(event);
+    locationLabels.set(event, label);
+  }
+  return label;
+}
+let renderFrame = 0;
+function scheduleFeed() {
+  if (!renderFrame) renderFrame = requestAnimationFrame(renderFeed);
+}
+function text(node, value) {
+  if (node.textContent !== value) node.textContent = value;
+}
 const paths = {
   map: "M3 5l6-2 6 2 6-2v16l-6 2-6-2-6 2z M9 3v16 M15 5v16",
   search: "M21 21l-5-5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
@@ -44,7 +67,10 @@ const paths = {
   refresh: "M20 7v5h-5 M20 12a8 8 0 1 0-2 6",
 };
 function icon(name) {
-  return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name === "search" ? "searchPeople" : name] || paths.other}"/></svg>`;
+  if (iconCache.has(name)) return iconCache.get(name);
+  const markup = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name === "search" ? "searchPeople" : name] || paths.other}"/></svg>`;
+  iconCache.set(name, markup);
+  return markup;
 }
 function hydrate(root = document) {
   root.querySelectorAll("[data-icon]").forEach((el) => {
@@ -77,19 +103,26 @@ let events = [],
   streamReceivedAt = 0,
   pollHealthy = false,
   feedScroll = 0,
-  loaded = false;
+  loaded = false,
+  feedETag = "";
 const filters = { query: "", kind: "all", level: "all", location: "all" };
+let dateFormatter, dateTimezone;
 function date(value) {
   const d = new Date(value);
   return Number.isFinite(d.getTime())
-    ? new Intl.DateTimeFormat("ru", {
-        timeZone: config.timezone || "Asia/Yekaterinburg",
-        day: "numeric",
-        month: "short",
-        hour: "2-digit",
-        minute: "2-digit",
-      }).format(d)
+    ? formatDate(d)
     : "Время не указано";
+}
+function formatDate(value) {
+  const timezone = config.timezone || "Asia/Yekaterinburg";
+  if (timezone !== dateTimezone) {
+    dateTimezone = timezone;
+    dateFormatter = new Intl.DateTimeFormat("ru", {
+      timeZone: timezone, day: "numeric", month: "short",
+      hour: "2-digit", minute: "2-digit",
+    });
+  }
+  return dateFormatter.format(value);
 }
 function relative(value) {
   const n = Math.max(
@@ -113,76 +146,153 @@ function locationMarkup(e) {
 function state(title, text, action, label = "Повторить загрузку") {
   return `<div class="state">${icon("other")}<h2>${esc(title)}</h2><p>${esc(text)}</p>${action ? `<button class="button primary" id="state-action">${esc(label)}</button>` : ""}</div>`;
 }
+function updateCard(e) {
+  let card = cards.get(e.id);
+  if (!card) {
+    const node = cardTemplate.content.firstElementChild.cloneNode(true);
+    card = {
+      node, kind: node.querySelector('.kind'), badge: node.querySelector('.badge'),
+      time: node.querySelector('time'), title: node.querySelector('h2'),
+      description: node.querySelector('p'), location: node.querySelector('.location-label'),
+      precision: node.querySelector('.precision'), counts: node.querySelector('.card-counts'),
+      sources: node.querySelector('.card-sources'), event: null,
+    };
+    node.dataset.event = e.id;
+    cards.set(e.id, card);
+  }
+  const prior = card.event;
+  if (!prior || prior.kind !== e.kind) {
+    card.kind.innerHTML = icon(e.kind) + esc(kinds[e.kind] || "Другое");
+  }
+  if (!prior || prior.severity !== e.severity) {
+    card.kind.className = `kind ${e.severity}`;
+    card.badge.className = `badge ${e.severity}`;
+    text(card.badge, severity[e.severity] || "Информация");
+  }
+  card.node.classList.toggle('selected', activeId === e.id);
+  if (!prior || prior.last_confirmed_at !== e.last_confirmed_at)
+    card.time.dateTime = e.last_confirmed_at;
+  text(card.time, relative(e.last_confirmed_at));
+  text(card.title, e.title);
+  text(card.description, e.description);
+  text(card.location, e.location_label || "Место не уточнено");
+  text(card.precision, locationSummary(e));
+  text(card.counts, `${countLabel(Number(e.updates) || 1, "сообщение", "сообщения", "сообщений")} · ${countLabel(Number(e.source_count) || 1, "источник", "источника", "источников")}`);
+  text(card.sources, (e.source_names || []).join(', '));
+  card.event = e;
+  return card.node;
+}
 function renderFeed() {
+  cancelAnimationFrame(renderFrame);
+  renderFrame = 0;
   const visible = filterEvents(events, filters);
-  $("#count").textContent =
-    `${countLabel(visible.length, "событие", "события", "событий")} · ${visible.filter(mapped).length} на карте`;
-  $("#filter-summary").textContent =
-    `${filters.level === "all" ? "Все уровни" : severity[filters.level]} · ${filters.location === "all" ? "Все места" : filters.location === "mapped" ? "На карте" : "Без точки"}`;
-  const scroll = $("#feed").scrollTop;
-  $("#feed").innerHTML = visible.length
-    ? visible
-        .map(
-          (e) =>
-            `<button class="card ${activeId === e.id ? "selected" : ""}" data-event="${esc(e.id)}"><div class="card-top"><span class="kind ${esc(e.severity)}">${icon(e.kind)}${esc(kinds[e.kind] || "Другое")}</span>${badge(e)}<time class="time" datetime="${esc(e.last_confirmed_at)}">${esc(relative(e.last_confirmed_at))}</time></div><h2>${esc(e.title)}</h2><p>${esc(e.description)}</p>${locationMarkup(e)}<div class="card-footer"><span>${countLabel(Number(e.updates) || 1, "сообщение", "сообщения", "сообщений")} · ${countLabel(Number(e.source_count) || 1, "источник", "источника", "источников")}</span><span>${esc((e.source_names || []).join(", "))}</span></div></button>`,
-        )
-        .join("")
-    : state(
-        events.length ? "Ничего не найдено" : "Пока нет активных событий",
-        events.length
-          ? "Попробуйте другой запрос или сбросьте фильтры."
-          : "Новые сообщения появятся здесь после обработки источников.",
-        events.length,
-        "Сбросить фильтры",
-      );
-  $("#feed").scrollTop = scroll;
-  $("#state-action")?.addEventListener("click", resetFilters);
+  text($("#count"), `${countLabel(visible.length, "событие", "события", "событий")} · ${visible.filter(mapped).length} на карте`);
+  text($("#filter-summary"), `${filters.level === "all" ? "Все уровни" : severity[filters.level]} · ${filters.location === "all" ? "Все места" : filters.location === "mapped" ? "На карте" : "Без точки"}`);
+  const feed = $("#feed");
+  const scroll = feed.scrollTop;
+  const live = new Set(events.map((e) => e.id));
+  for (const [id, card] of cards) {
+    if (!live.has(id)) {
+      card.node.remove();
+      cards.delete(id);
+    }
+  }
+  if (visible.length) {
+    const shown = new Set(visible.map((e) => e.id));
+    for (const node of [...feed.children]) {
+      if (!shown.has(node.dataset.event)) node.remove();
+    }
+    // Retain unchanged nodes in place, including focus and measured intrinsic sizes.
+    let cursor = feed.firstElementChild;
+    for (const e of visible) {
+      const node = updateCard(e);
+      if (node === cursor) cursor = cursor.nextElementSibling;
+      else feed.insertBefore(node, cursor);
+    }
+  } else {
+    const markup = state(
+      events.length ? "Ничего не найдено" : "Пока нет активных событий",
+      events.length ? "Попробуйте другой запрос или сбросьте фильтры." : "Новые сообщения появятся здесь после обработки источников.",
+      events.length, "Сбросить фильтры",
+    );
+    if (feed.innerHTML !== markup) feed.innerHTML = markup;
+    $("#state-action")?.addEventListener("click", resetFilters, { once: true });
+  }
+  feed.scrollTop = scroll;
   renderMarkers(visible);
 }
 function renderMarkers(visible) {
   if (!map) return;
-  markers.forEach((m) => m.remove());
-  markers.clear();
-  areas.forEach((area) => area.remove());
-  areas.clear();
-  for (const e of visible.filter(mapped)) {
-    if (uncertaintyRadius(e))
-      areas.set(
-        e.id,
-        L.circle([e.latitude, e.longitude], {
-          radius: uncertaintyRadius(e),
-          color: colors[e.severity] || colors.info,
-          opacity: 0.3,
-          fillOpacity: 0.05,
-          weight: 1,
-          dashArray: e.location_precision === "exact" ? null : "4 4",
-          interactive: false,
-        }).addTo(map),
-      );
-    const marker = L.marker([e.latitude, e.longitude], {
-      title: `${e.title} — ${locationSummary(e)}`,
-      keyboard: true,
-      icon: L.divIcon({
-        className: "",
-        html: `<div class="event-marker ${esc(e.severity)} ${activeId === e.id ? "selected" : ""}">${icon(e.kind)}</div>`,
-        iconSize: [30, 30],
-        iconAnchor: [15, 15],
-      }),
-    })
-      .addTo(map)
-      .on("click", () => openDetail(e.id));
-    markers.set(e.id, marker);
+  const shown = new Set();
+  for (const e of visible) {
+    if (!mapped(e)) continue;
+    shown.add(e.id);
+    const prior = markerEvents.get(e.id);
+    let marker = markers.get(e.id);
+    const moved = !prior || prior.latitude !== e.latitude || prior.longitude !== e.longitude;
+    const title = `${e.title} — ${locationSummary(e)}`;
+    if (!marker) {
+      marker = L.marker([e.latitude, e.longitude], {
+        title, keyboard: true, icon: markerIcon(e),
+      }).addTo(map).on("click", () => openDetail(e.id));
+      markers.set(e.id, marker);
+    } else {
+      if (moved) marker.setLatLng([e.latitude, e.longitude]);
+      if (prior.kind !== e.kind || prior.severity !== e.severity) marker.setIcon(markerIcon(e));
+      if (marker.options.title !== title) {
+        marker.options.title = title;
+        marker.getElement().title = title;
+      }
+    }
+    const radius = uncertaintyRadius(e);
+    let area = areas.get(e.id);
+    if (!radius) {
+      if (area) { area.remove(); areas.delete(e.id); }
+    } else if (!area) {
+      area = L.circle([e.latitude, e.longitude], {
+        radius, color: colors[e.severity] || colors.info,
+        opacity: e.id === activeId ? 0.6 : 0.3,
+        fillOpacity: e.id === activeId ? 0.12 : 0.05,
+        weight: e.id === activeId ? 2 : 1,
+        dashArray: e.location_precision === "exact" ? null : "4 4",
+        interactive: false,
+      }).addTo(map);
+      areas.set(e.id, area);
+    } else {
+      if (moved) area.setLatLng([e.latitude, e.longitude]);
+      if (radius !== uncertaintyRadius(prior)) area.setRadius(radius);
+      if (prior.severity !== e.severity || prior.location_precision !== e.location_precision)
+        area.setStyle({ color: colors[e.severity] || colors.info, dashArray: e.location_precision === "exact" ? null : "4 4" });
+    }
+    markerEvents.set(e.id, e);
   }
-  selectCircle();
+  for (const [id, marker] of markers) {
+    if (!shown.has(id)) {
+      marker.remove(); markers.delete(id); markerEvents.delete(id);
+      areas.get(id)?.remove(); areas.delete(id);
+    }
+  }
 }
+function markerIcon(e) {
+  return L.divIcon({
+    className: "",
+    html: `<div class="event-marker ${esc(e.severity)} ${activeId === e.id ? "selected" : ""}">${icon(e.kind)}</div>`,
+    iconSize: [30, 30], iconAnchor: [15, 15],
+  });
+}
+let selectedId = null;
 function selectCircle() {
-  areas.forEach((area, id) =>
-    area.setStyle({
-      opacity: id === activeId ? 0.6 : 0.3,
-      fillOpacity: id === activeId ? 0.12 : 0.05,
-      weight: id === activeId ? 2 : 1,
-    }),
-  );
+  if (selectedId === activeId) return;
+  for (const id of [selectedId, activeId]) {
+    const selected = id === activeId;
+    areas.get(id)?.setStyle({
+      opacity: selected ? 0.6 : 0.3, fillOpacity: selected ? 0.12 : 0.05,
+      weight: selected ? 2 : 1,
+    });
+    markers.get(id)?.getElement()?.firstElementChild.classList.toggle('selected', selected);
+    cards.get(id)?.node.classList.toggle('selected', selected);
+  }
+  selectedId = activeId;
 }
 function mapUnavailable() {
   $("#map-error").hidden = false;
@@ -198,7 +308,10 @@ function initMap() {
   }
   try {
     if (map) map.remove();
-    map = L.map("map", { zoomControl: false }).setView(
+    markers.clear();
+    areas.clear();
+    markerEvents.clear();
+    map = L.map("map", { zoomControl: false, preferCanvas: true }).setView(
       [config.latitude, config.longitude],
       config.zoom,
     );
@@ -249,9 +362,19 @@ async function request(url) {
 async function refresh(initial = false) {
   const sequence = ++refreshSequence;
   try {
-    const items = await request("/api/events");
+    const response = await fetch("/api/events", {
+      signal: AbortSignal.timeout(15000),
+      headers: feedETag && !initial ? { "If-None-Match": feedETag } : {},
+    });
+    if (response.status === 304) {
+      if (sequence === refreshSequence && activeId) openDetail(activeId, false);
+      return true;
+    }
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const items = await response.json();
     if (sequence !== refreshSequence) return true;
     if (!Array.isArray(items)) throw new Error("Invalid events");
+    feedETag = response.headers.get("ETag") || "";
     if (initial || !loaded) {
       events = items;
       loaded = true;
@@ -326,8 +449,9 @@ async function openDetail(id, focus = true) {
     const e = await request("/api/events/" + encodeURIComponent(id));
     if (seq !== detailSequence) return;
     const entries = e.feed || [];
+    const placeNotice = locationNotice(e);
     $("#detail").innerHTML =
-      `<button class="button back" id="back">${icon("back")}К событиям</button><div class="card-top"><span class="kind ${esc(e.severity)}">${icon(e.kind)}${esc(kinds[e.kind] || "Другое")}</span>${badge(e)}</div><h2>${esc(e.title)}</h2><p>${esc(e.description)}</p>${locationMarkup(e)}${!mapped(e) ? '<div class="inline-notice">В источнике нет достаточно конкретного места. Событие доступно в ленте без точки на карте.</div>' : e.location_precision !== "exact" ? '<div class="inline-notice">Пунктирный круг показывает приблизительную область, а маркер — её центр. Место события внутри круга не установлено точно.</div>' : ""}<div class="detail-meta">Обновлено ${esc(date(e.updated_at))} · ${countLabel(Number(e.source_count) || 1, "источник", "источника", "источников")}${e.location_source ? `<br>Место: ${esc(e.location_source)}` : ""}${locationConfidence(e) ? `<br>${esc(locationConfidence(e))} (оценка модели)` : ""}</div>${mapped(e) ? '<button class="button" id="show-on-map">Показать на карте</button>' : ""}<h3>Сообщения и обновления</h3>${
+      `<button class="button back" id="back">${icon("back")}К событиям</button><div class="card-top"><span class="kind ${esc(e.severity)}">${icon(e.kind)}${esc(kinds[e.kind] || "Другое")}</span>${badge(e)}</div><h2>${esc(e.title)}</h2><p>${esc(e.description)}</p>${locationMarkup(e)}${placeNotice ? `<div class="inline-notice">${esc(placeNotice)}</div>` : ""}<div class="detail-meta">Обновлено ${esc(date(e.updated_at))} · ${countLabel(Number(e.source_count) || 1, "источник", "источника", "источников")}${e.location_source ? `<br>Место: ${esc(e.location_source)}` : ""}${locationConfidence(e) ? `<br>${esc(locationConfidence(e))} (оценка модели)` : ""}</div>${mapped(e) ? '<button class="button" id="show-on-map">Показать на карте</button>' : ""}<h3>Сообщения и обновления</h3>${
         entries.length
           ? entries
               .map((p) => {
@@ -372,13 +496,11 @@ function closeDetail() {
   $("#feed-tools").hidden = false;
   $("#sidebar").classList.remove("detail-open");
   if (pendingEvents) applyUpdates();
-  renderFeed();
+  else renderFeed();
   $("#feed").scrollTop = feedScroll;
   selectCircle();
-  const button = [...document.querySelectorAll("[data-event]")].find(
-    (b) => b.dataset.event === old,
-  );
-  (button || $("#feed")).focus({ preventScroll: true });
+  const button = cards.get(old)?.node;
+  (button?.isConnected ? button : $("#feed")).focus({ preventScroll: true });
 }
 function applyUpdates() {
   if (pendingEvents) {
@@ -421,7 +543,7 @@ $("#categories").onclick = (e) => {
 };
 $("#search").addEventListener("input", (e) => {
   filters.query = e.target.value;
-  renderFeed();
+  scheduleFeed();
 });
 $("#feed").onclick = (e) => {
   const b = e.target.closest("[data-event]");
@@ -525,7 +647,7 @@ $("#sheet-toggle").onclick = () => {
 $("#expand-feed").onclick = () => setSheet(sheet === 2 ? 1 : 2);
 $("#sheet-handle").addEventListener("pointerdown", (e) => {
   startY = e.clientY;
-  e.currentTarget.setPointerCapture(e.pointerId);
+  (e.target.closest("button") || e.currentTarget).setPointerCapture(e.pointerId);
 });
 $("#sheet-handle").addEventListener("pointerup", (e) => {
   const delta = e.clientY - startY;
@@ -560,7 +682,6 @@ async function bootstrap() {
     $("#stream-notice").hidden = true;
   }
   stream.onopen = () => {
-    refresh();
     status();
   };
   stream.onerror = () => {
@@ -603,11 +724,9 @@ async function bootstrap() {
   setInterval(status, 60000);
   setInterval(() => {
     if (!activeId && loaded)
-      $("#feed")
-        .querySelectorAll("time[datetime]")
-        .forEach((time) => {
-          time.textContent = relative(time.dateTime);
-        });
+      cards.forEach((card) => {
+        if (card.node.isConnected) text(card.time, relative(card.time.dateTime));
+      });
   }, 60000);
   const initial = new URLSearchParams(window.location.search).get("event");
   if (initial) openDetail(initial);

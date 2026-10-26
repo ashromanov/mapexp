@@ -43,6 +43,134 @@ def normalize_location(query: str) -> str:
     return query
 
 
+_HOUSE = re.compile(
+    r"(?<![\w])\d+[а-яa-z]?(?:\s*/\s*\d+[а-яa-z]?)?"
+    r"(?:\s*(?:корпус|корп\.?|к\.?|строение|стр\.?)\s*\d+[а-яa-z]?)?(?![\w])",
+    re.IGNORECASE,
+)
+_STREET_TYPES = {
+    "улица",
+    "шоссе",
+    "проспект",
+    "переулок",
+    "бульвар",
+    "проезд",
+    "набережная",
+}
+_STOP_WORDS = _STREET_TYPES | {
+    "ул",
+    "ш",
+    "пр",
+    "просп",
+    "пер",
+    "г",
+    "город",
+    "дом",
+    "д",
+    "около",
+    "возле",
+    "рядом",
+    "остановка",
+    "остановке",
+    "район",
+    "районе",
+    "на",
+    "в",
+    "у",
+    "с",
+    "со",
+    "и",
+    "улиц",
+    "улице",
+    "улицы",
+    "районы",
+    "районах",
+    "районов",
+    "перекресток",
+    "перекрестке",
+    "пересечение",
+    "пересечении",
+}
+
+
+def place_tokens(value: str) -> set[str]:
+    value = _HOUSE.sub(lambda match: normalize_house(match.group()), value)
+    city = set(re.findall(r"[а-яa-z0-9]+", CITY_NAME.casefold().replace("ё", "е")))
+    if CITY_NAME.casefold().endswith("ь"):
+        base = CITY_NAME.casefold()[:-1]
+        city.update({base + "и", base + "ью"})
+    return (
+        set(re.findall(r"[а-яa-z0-9]+", value.casefold().replace("ё", "е")))
+        - _STOP_WORDS
+        - city
+    )
+
+
+def house_number(value: str) -> str | None:
+    matches = list(_HOUSE.finditer(value))
+    return normalize_house(matches[-1].group()) if matches else None
+
+
+def normalize_house(value: str) -> str:
+    value = value.casefold().translate(str.maketrans("abcehkmoptxy", "авсенкмортху"))
+    value = re.sub(r"корпус|корп\.?|к\.?", "к", value)
+    value = re.sub(r"строение|стр\.?", "стр", value)
+    return re.sub(r"\s+", "", value)
+
+
+def address_matches(query: str, candidate: dict) -> bool:
+    """Compare complete house identifiers, street and city, not substring numbers."""
+    house = house_number(query)
+    if not house or candidate.get("precision") != "address":
+        return False
+    address = candidate.get("address") or {}
+    label = candidate.get("label", "")
+    city = address.get("city")
+    if city and place_tokens(city) != place_tokens(CITY_NAME):
+        return False
+    if not city and CITY_NAME.casefold().replace(
+        "ё", "е"
+    ) not in label.casefold().replace("ё", "е"):
+        return False
+    actual_house = address.get("house_number")
+    if actual_house:
+        if normalize_house(actual_house) != house:
+            return False
+    elif house not in {
+        normalize_house(match.group()) for match in _HOUSE.finditer(label)
+    }:
+        return False
+    expected_street = place_tokens(_HOUSE.sub(" ", query))
+    street = address.get("street") or label
+    types = _STREET_TYPES & set(query.casefold().split())
+    actual_types = _STREET_TYPES & set(street.casefold().split())
+    return (
+        bool(expected_street)
+        and expected_street <= place_tokens(street)
+        and (not types or not actual_types or types == actual_types)
+    )
+
+
+def place_match_score(query: str, candidate: dict) -> float:
+    if address_matches(query, candidate):
+        return 1.0
+    tokens = place_tokens(_HOUSE.sub(" ", query))
+    if not tokens:
+        return 0.0
+    matched = len(tokens & place_tokens(candidate.get("label", ""))) / len(tokens)
+    return matched * (0.8 if house_number(query) else 1.0)
+
+
+def _sufficient_match(query: str, results: list[dict]) -> bool:
+    if house_number(query):
+        return any(address_matches(query, item) for item in results)
+    return any(
+        place_match_score(query, item) >= 0.8
+        for item in results
+        if item.get("precision") not in {"city", "unknown"}
+    )
+
+
 def _query_variants(query: str) -> tuple[str, ...]:
     plain = re.sub(
         rf"(?:,\s*)?{re.escape(CITY_NAME)}$", "", query, flags=re.IGNORECASE
@@ -185,6 +313,11 @@ def _photon(query: str) -> list[dict]:
             "Photon/OpenStreetMap",
             bounds=p.get("extent"),
             feature_type=f"{p.get('osm_key', '')}/{p.get('osm_value', '')}",
+            address={
+                "house_number": p.get("housenumber"),
+                "street": p.get("street"),
+                "city": p.get("city"),
+            },
         )
         if item:
             results.append(item)
@@ -235,6 +368,13 @@ def _nominatim(query: str) -> list[dict]:
                 bool(address.get("house_number")),
             ),
             "Nominatim/OpenStreetMap",
+            address={
+                "house_number": address.get("house_number"),
+                "street": address.get("road") or address.get("pedestrian"),
+                "city": address.get("city")
+                or address.get("town")
+                or address.get("village"),
+            },
             feature_type=f"{p.get('category', p.get('class', ''))}/{p.get('type', '')}",
             bounds=[
                 p["boundingbox"][2],
@@ -345,7 +485,7 @@ def geocode(query: str, path=None) -> list[dict]:
     if not query:
         return []
     path = path or settings.database
-    key = f"v7:{CITY_LAT}:{CITY_LON}:{query}"
+    key = f"v8:{CITY_LAT}:{CITY_LON}:{query}"
     with connect(path) as conn:
         cached = conn.execute(
             "SELECT result_json,created_at FROM geocode_cache WHERE query=?", (key,)
@@ -363,10 +503,12 @@ def geocode(query: str, path=None) -> list[dict]:
     for provider in [_photon, _nominatim, _open_meteo]:
         for variant in _query_variants(query):
             results.extend(provider(variant))
-            if results:
+            if _sufficient_match(query, results):
                 break
-        if results:
+        if _sufficient_match(query, results):
             break
+    # Sort before limiting so a good fallback cannot be displaced by weak first-provider results.
+    results.sort(key=lambda item: place_match_score(query, item), reverse=True)
     results = _dedupe(results)
     with connect(path) as conn:
         conn.execute(

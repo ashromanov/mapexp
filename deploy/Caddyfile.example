@@ -1,0 +1,16 @@
+# Import this additional site from the existing /etc/caddy/Caddyfile.
+# Keep existing VPN sites and private routes unchanged.
+mapexp.example.com {
+    encode gzip {
+        match {
+            header Content-Type application/json*
+            header Content-Type application/javascript*
+            header Content-Type text/css*
+            header Content-Type text/html*
+            header Content-Type image/svg+xml*
+        }
+    }
+    reverse_proxy 127.0.0.1:8010 {
+        flush_interval -1
+    }
+}

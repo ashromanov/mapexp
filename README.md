@@ -8,6 +8,7 @@
 </p>
 
 <p align="center">
+  <a href="https://mapexp.2-26-150-51.sslip.io">Live map</a> ·
   <a href="#the-llm-pipeline">LLM pipeline</a> ·
   <a href="#inside-the-product">Screenshots</a> ·
   <a href="#decision-policy">Decision policy</a> ·
@@ -76,7 +77,7 @@ The implementation uses `typesafe/jev-1.13` through the OpenRouter alpha decisio
 - **Typed model outputs:** finite choices, validated score distributions, strict generation schemas, and explicit rejection of malformed responses.
 - **Evidence-aware generation:** source attribution, uncertainty preservation, exact location quotes, and a repair-or-excerpt fallback.
 - **Temporal entity resolution:** new incidents, follow-up reports, source revisions, corrections, and reposts have different consequences.
-- **Abstention:** uncertain geography produces an unlocated card; uncertain relevance can defer processing.
+- **Recall-oriented geography:** plausible place matches produce approximate areas; absent evidence or unusable geometry leaves an unlocated card. Uncertain relevance can defer processing.
 - **Observability:** decision audits retain model identity, answers, draft output, token/cost usage when supplied, and call latency.
 - **Failure control:** retries respect provider delays; account failures pause processing instead of repeatedly spending requests.
 
@@ -110,11 +111,11 @@ The implementation uses `typesafe/jev-1.13` through the OpenRouter alpha decisio
 | Clearly irrelevant new post | Local-incident score ≤ `0.05`; edits of accepted evidence still proceed through synthesis. |
 | Merge with an existing incident | Selected option score ≥ `0.90` and confidence ≥ `0.80`. |
 | Publish generated prose | Support score ≥ `0.70` / `0.85` / `0.95`, depending on severity. |
-| Accept a location candidate | Grounding score ≥ `0.75`, selected option score ≥ `0.65`, confidence ≥ `0.60`; distant competing alternatives can still reject it. |
+| Accept a location candidate | Grounding score ≥ `0.35`; prefer a unique quoted full-address match, otherwise use a model option ≥ `0.35` or a place-name match ≥ `0.60` (`0.45` for partial intersection/multiple-area clues). Uncertainty expands the mapped area. |
 | Extend display lifetime | New-facts score ≥ `0.90`; reposting old facts does not renew it. |
 | Display lifetime | At least 6 / 12 / 24 hours by severity, capped at seven days. |
 
-Location precision cannot exceed the source clue or geocoder result. The uncertainty radius incorporates geographic extent and model uncertainty; it is **not** a calibrated containment interval. `location_confidence` is a model score, not incident truth probability. Message counts represent related posts, not independent confirmations.
+Geographic mapping favors recall: uncertain coordinates are shown as approximate areas rather than silently dropped. [Mapping policy and reprocessing](docs/MAPPING.md). Location precision cannot exceed the source clue or geocoder result. The uncertainty radius incorporates geographic extent and model uncertainty; it is **not** a calibrated containment interval. `location_confidence` is a model score, not incident truth probability. Message counts represent related posts, not independent confirmations.
 
 ### Evaluation, honestly scoped
 
@@ -148,6 +149,10 @@ Two processes, one database, no frontend build step. The worker owns ingestion, 
 | [`ingest.py`](ingest.py) / [`pipeline.py`](pipeline.py) | Telegram ingestion, polling, backfill, scheduling, processing. |
 | [`web.py`](web.py) / [`static/`](static/) | Public API, SSE, media delivery, responsive map and feed. |
 | [`tests/`](tests/) | Isolated backend regression checks; browser helper tests live in `static/ui.test.mjs`. |
+
+## Hosting and CI/CD
+
+The application runs on an Ubuntu VPS, with GitHub Actions testing each update and deploying tested container images from GHCR. SQLite, source configuration, media, provider keys and Telegram sessions persist outside the image. See [deployment and recovery](docs/DEPLOYMENT.md), [delivery scaling](docs/SCALING.md), and [rendering](docs/RENDERING.md).
 
 ## Run it locally
 

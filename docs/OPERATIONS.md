@@ -45,6 +45,12 @@ Compose mounts `data/`, `media/`, `sessions/`, and `sources.json`; credentials, 
 
 The worker installs live-message handling before backfill, processes newer historical posts first, and polls for new messages and accepted-post edits every 30 seconds. Polling matters because public-channel push delivery is not guaranteed without subscription. It also retries decisions and media downloads, and syncs available comments.
 
+## Hosted deployment
+
+[GitHub CI/CD, persistent storage, HTTPS and recovery](DEPLOYMENT.md) describe the
+production setup. Development Compose remains separate from the release-image
+configuration in `deploy/compose.production.yml`.
+
 ## Public API
 
 | Route | Purpose |
@@ -57,6 +63,9 @@ The worker installs live-message handling before backfill, processes newer histo
 | `/healthz` | HTTP/SQLite health; does not prove provider health. |
 | `/media/...` | Media attached to active incidents; unsafe formats download as attachments. |
 | `/docs` | FastAPI's generated API documentation. |
+
+See [delivery scaling and regression checks](SCALING.md) for shared SSE polling,
+feed caching, gzip/ETags, schema migration, and the local 1,000-client exercise.
 
 The UI preserves its last feed during disconnection. Map failure does not prevent reading the feed. If an SSE heartbeat is absent, the client falls back to polling every 15 seconds; buffering proxies may trigger this behavior. A temporary tunnel is available only while its process runs.
 

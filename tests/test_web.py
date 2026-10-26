@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -57,9 +57,9 @@ class WebTests(unittest.TestCase):
         for name in [
             "connect",
             "init_db",
-            "list_events",
             "status_summary",
             "stream_revision",
+            "feed_snapshot",
         ]:
             original = getattr(storage, name)
             patcher = patch.object(
@@ -96,7 +96,7 @@ class WebTests(unittest.TestCase):
         for header, value in [
             ("x-content-type-options", "nosniff"),
             ("x-frame-options", "DENY"),
-            ("cache-control", "no-store"),
+            ("cache-control", "private, no-cache"),
         ]:
             self.assertEqual(response.headers[header], value)
         self.assertIn("object-src 'none'", response.headers["content-security-policy"])
@@ -179,10 +179,8 @@ class WebTests(unittest.TestCase):
         async def exercise():
             request = AsyncMock()
             request.is_disconnected.side_effect = [False, True]
-            with (
-                patch.object(web, "stream_revision", return_value="revision-7"),
-                patch.object(web.asyncio, "sleep", new=AsyncMock()),
-            ):
+            hub = web.UpdateHub("revision-7")
+            with patch.object(web, "update_hub", hub), patch.object(hub, "wait", new=AsyncMock()):
                 response = await web.stream(request)
                 chunks = [chunk async for chunk in response.body_iterator]
             self.assertEqual(chunks, ["event: events\ndata: revision-7\n\n"])

@@ -9,9 +9,9 @@
     <meta name="theme-color" content="#0f5e66" />
     <title>MapExp — события города</title>
     <link rel="stylesheet" href="/static/vendor/leaflet.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=geo3" />
+    <link rel="stylesheet" href="/static/styles.css?v=recall2" />
     <script defer src="/static/vendor/leaflet.js"></script>
-    <script type="module" src="/static/app.js?v=geo3"></script>
+    <script type="module" src="/static/app.js?v=recall2"></script>
   </head>
   <body>
     <header class="app-header">
@@ -130,6 +130,14 @@
         <div class="freshness" id="freshness">Проверяем свежесть данных…</div>
       </aside>
     </main>
+    <template id="event-card">
+      <button class="card">
+        <div class="card-top"><span class="kind"></span><span class="badge"></span><time class="time"></time></div>
+        <h2></h2><p></p>
+        <div class="location"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0 M15 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0"/></svg><span class="location-label"></span><span class="precision"></span></div>
+        <div class="card-footer"><span class="card-counts"></span><span class="card-sources"></span></div>
+      </button>
+    </template>
     <dialog id="filters" class="dialog">
       <form method="dialog">
         <div class="dialog-heading">

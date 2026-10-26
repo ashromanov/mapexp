@@ -1,0 +1,97 @@
+{
+  "date": "2026-10-26",
+  "environment": "Local Linux, Python 3.14, one Uvicorn process; synthetic data; client and server on the same host",
+  "operations": {
+    "before": {
+      "list_events": {
+        "median_ms": 48.078,
+        "select_statements": 1001
+      },
+      "stream_revision": {
+        "median_ms": 1217.106,
+        "select_statements": 5049
+      }
+    },
+    "after": {
+      "list_events": {
+        "median_ms": 28.481,
+        "select_statements": 2
+      },
+      "stream_revision": {
+        "median_ms": 0.918,
+        "select_statements": 1
+      }
+    }
+  },
+  "http_and_sse": {
+    "users": 1000,
+    "incidents": 1000,
+    "connected": 1000,
+    "heartbeats_received": 1000,
+    "idle_revision_checks_in_12s": 6,
+    "conditional_requests": {
+      "requests": 1000,
+      "seconds": 2.142,
+      "p50_ms": 95.83,
+      "p95_ms": 120.97,
+      "wire_body_bytes": 0
+    },
+    "compressed_requests": {
+      "requests": 1000,
+      "seconds": 4.089,
+      "p50_ms": 131.62,
+      "p95_ms": 594.92,
+      "wire_body_bytes": 82999000
+    },
+    "update_delivered_to_all_ms": 614.35,
+    "updates_received": 1000,
+    "feed_rebuilds_for_one_write": 1,
+    "json_bytes": 1006338,
+    "gzip_bytes": 82999,
+    "server_peak_rss_kib": 144304,
+    "errors": [],
+    "request_concurrency": 50
+  },
+  "http_and_sse_python311": {
+    "users": 1000,
+    "incidents": 1000,
+    "connected": 1000,
+    "heartbeats_received": 1000,
+    "idle_revision_checks_in_12s": 6,
+    "conditional_requests": {
+      "requests": 1000,
+      "seconds": 3.456,
+      "p50_ms": 139.95,
+      "p95_ms": 340.53,
+      "wire_body_bytes": 0
+    },
+    "compressed_requests": {
+      "requests": 1000,
+      "seconds": 5.604,
+      "p50_ms": 189.53,
+      "p95_ms": 775.71,
+      "wire_body_bytes": 82999000
+    },
+    "update_delivered_to_all_ms": 1544.78,
+    "updates_received": 1000,
+    "feed_rebuilds_for_one_write": 1,
+    "json_bytes": 1006338,
+    "gzip_bytes": 82999,
+    "server_peak_rss_kib": 126776,
+    "errors": [],
+    "request_concurrency": 50
+  },
+  "regression": {
+    "backend_tests": 65,
+    "python_versions": [
+      "3.11.15",
+      "3.14"
+    ],
+    "browsers_passed": [
+      "Chromium",
+      "Firefox 157"
+    ],
+    "webkit": "Launch blocked by missing Linux shared libraries",
+    "live_provider_calls": false
+  }
+}

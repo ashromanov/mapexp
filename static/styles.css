@@ -778,7 +778,7 @@ input[type="radio"] {
     border-right: 0;
     border-radius: 20px 20px 0 0;
     box-shadow: var(--shadow);
-    transition: height 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+    /* Snap to the final geometry; avoid repeated map/feed layout during animation. */
     padding-bottom: env(safe-area-inset-bottom);
   }
   .sheet-handle {
@@ -986,4 +986,13 @@ input[type="radio"] {
   .workspace:has(.sidebar.full) .map-controls {
     visibility: hidden;
   }
+}
+
+/* Keep document semantics while skipping work for off-screen feed cards. */
+.feed {
+  contain: layout style paint;
+}
+.card {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 240px;
 }

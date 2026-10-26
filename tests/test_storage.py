@@ -139,7 +139,7 @@ class StorageTests(unittest.TestCase):
         )
 
     def test_unresolved_place_correction_clears_previous_point(self):
-        pid, eid = self.event()
+        _, eid = self.event()
         changed, _ = storage.save_post(self.post(message=2), self.db)
         storage.apply_decision(
             changed,
@@ -287,7 +287,7 @@ class StorageTests(unittest.TestCase):
         self.assertIn(pid, storage.pending_post_ids(self.db))
         error.retry_after = float("nan")
         storage.schedule_retry(pid, error, path=self.db)
-        old, _ = storage.save_post(
+        _old, _ = storage.save_post(
             self.post(
                 message=3, posted_at=(self.time - timedelta(days=30)).isoformat()
             ),
@@ -331,7 +331,7 @@ class StorageTests(unittest.TestCase):
             self.db,
         )
         self.assertIn(old, storage.pending_post_ids(self.db))
-        pid, eid = self.event()
+        _, eid = self.event()
         with storage.connect(self.db) as conn:
             conn.execute("UPDATE events SET status='expired' WHERE id=?", (eid,))
         self.assertIsNone(storage.get_event(eid, self.db))
@@ -353,6 +353,10 @@ class StorageTests(unittest.TestCase):
     def test_migration_preserves_ids_and_fts_active_only(self):
         pid, eid = self.event()
         with storage.connect(self.db) as conn:
+            # Recreate a pre-revision-counter schema, without modern triggers.
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'").fetchall():
+                conn.execute(f'DROP TRIGGER "{row[0]}"')
+            conn.execute("DROP TABLE public_revision")
             for table, columns in {
                 "posts": [
                     "revision",
@@ -385,7 +389,7 @@ class StorageTests(unittest.TestCase):
         )
         self.assertEqual(storage.find_candidates("пожар", path=self.db)[0]["id"], eid)
         with storage.connect(self.db) as conn:
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 2)
             conn.execute("UPDATE events SET status='expired' WHERE id=?", (eid,))
         self.assertEqual(storage.find_candidates("пожар", path=self.db), [])
 

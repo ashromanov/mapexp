@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
-import re
+import json
 import math
+import re
 import sqlite3
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -14,7 +14,6 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 from settings import settings
-
 
 DB_PATH = settings.database
 _MIN_DISPLAY_MINUTES = {"info": 360, "warning": 720, "danger": 1_440, "critical": 1_440}
@@ -190,7 +189,24 @@ def init_db(path: Path | str = DB_PATH) -> None:
         conn.execute(
             "INSERT INTO event_search SELECT id,title || ' ' || description || ' ' || COALESCE(location_label,'') FROM events"
         )
-        conn.execute("PRAGMA user_version=1")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS public_revision (
+                id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL);
+            INSERT OR IGNORE INTO public_revision VALUES (1, 0);
+        """)
+        # Track public-data writes transactionally, including direct SQL and deletes.
+        # No-op updates do not invalidate readers; worker heartbeats are excluded.
+        for table in ("events", "event_posts", "posts", "sources", "media", "evidence_revisions"):
+            columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+            changed = " OR ".join(f'NEW."{col}" IS NOT OLD."{col}"' for col in columns)
+            for operation in ("INSERT", "UPDATE", "DELETE"):
+                condition = f"WHEN {changed}" if operation == "UPDATE" else ""
+                conn.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS public_{table}_{operation.lower()}
+                    AFTER {operation} ON {table} {condition}
+                    BEGIN UPDATE public_revision SET value=value+1 WHERE id=1; END
+                """)
+        conn.execute("PRAGMA user_version=2")
         conn.commit()
     finally:
         conn.close()
@@ -746,24 +762,47 @@ def purge_expired_events(path: Path | str = DB_PATH) -> tuple[int, int]:
     return expire_events(path), 0
 
 
+def _list_events(conn: sqlite3.Connection, stamp: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT e.*,COUNT(ep.post_id) AS updates,COUNT(ep.post_id) AS message_count,COUNT(DISTINCT CASE WHEN ep.role<>'comment' THEN p.source_id END) AS source_count,(SELECT s.name FROM event_posts ep2 JOIN posts p2 ON p2.id=ep2.post_id JOIN sources s ON s.id=p2.source_id WHERE ep2.event_id=e.id AND ep2.role<>'comment' ORDER BY p2.posted_at DESC LIMIT 1) AS source_name FROM events e LEFT JOIN event_posts ep ON ep.event_id=e.id LEFT JOIN posts p ON p.id=ep.post_id WHERE e.status='active' AND e.expires_at>? GROUP BY e.id ORDER BY e.last_confirmed_at DESC",
+        (stamp,),
+    ).fetchall()
+    # One batched lookup replaces one additional query per event.
+    names: dict[str, list[str]] = {}
+    for row in conn.execute(
+        "SELECT DISTINCT ep.event_id,s.name FROM event_posts ep JOIN posts p ON p.id=ep.post_id JOIN sources s ON s.id=p.source_id JOIN events e ON e.id=ep.event_id WHERE ep.role<>'comment' AND e.status='active' AND e.expires_at>? ORDER BY ep.event_id,s.name",
+        (stamp,),
+    ):
+        names.setdefault(row["event_id"], []).append(row["name"])
+    results = [dict(row) for row in rows]
+    for event in results:
+        event["source_names"] = names.get(event["id"], [])
+        event["location_source"] = event["location_provider"]
+        _hide_unlocated_coordinates(event)
+    return results
+
+
 def list_events(path: Path | str = DB_PATH) -> list[dict[str, Any]]:
     with connect(path) as conn:
-        rows = conn.execute(
-            "SELECT e.*,COUNT(ep.post_id) AS updates,COUNT(ep.post_id) AS message_count,COUNT(DISTINCT CASE WHEN ep.role<>'comment' THEN p.source_id END) AS source_count,(SELECT s.name FROM event_posts ep2 JOIN posts p2 ON p2.id=ep2.post_id JOIN sources s ON s.id=p2.source_id WHERE ep2.event_id=e.id AND ep2.role<>'comment' ORDER BY p2.posted_at DESC LIMIT 1) AS source_name FROM events e LEFT JOIN event_posts ep ON ep.event_id=e.id LEFT JOIN posts p ON p.id=ep.post_id WHERE e.status='active' AND e.expires_at>? GROUP BY e.id ORDER BY e.last_confirmed_at DESC",
-            (now(),),
-        ).fetchall()
-        results = [dict(row) for row in rows]
-        for event in results:
-            event["source_names"] = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT DISTINCT s.name FROM event_posts ep JOIN posts p ON p.id=ep.post_id JOIN sources s ON s.id=p.source_id WHERE ep.event_id=? AND ep.role<>'comment' ORDER BY s.name",
-                    (event["id"],),
-                )
-            ]
-            event["location_source"] = event["location_provider"]
-            _hide_unlocated_coordinates(event)
-        return results
+        conn.execute("BEGIN")
+        return _list_events(conn, now())
+
+
+def _stream_revision(conn: sqlite3.Connection, stamp: str) -> str:
+    row = conn.execute(
+        "SELECT value,(SELECT COUNT(*) FROM events WHERE status='active' AND expires_at<=?) AS expired FROM public_revision WHERE id=1",
+        (stamp,),
+    ).fetchone()
+    # Time alone can hide an event, even when ingestion is stopped.
+    return f"{row['value']}:{row['expired']}"
+
+
+def feed_snapshot(path: Path | str = DB_PATH) -> tuple[str, list[dict[str, Any]]]:
+    """Read the revision and cards from the same SQLite read snapshot."""
+    with connect(path) as conn:
+        conn.execute("BEGIN")
+        stamp = now()
+        return _stream_revision(conn, stamp), _list_events(conn, stamp)
 
 
 def get_event(
@@ -778,6 +817,15 @@ def get_event(
         if not event:
             return None
         result = dict(event)
+        latest = conn.execute(
+            "SELECT result_json FROM decisions WHERE event_id=? ORDER BY id DESC LIMIT 1", (event_id,)
+        ).fetchone()
+        if latest:
+            latest_decision = json.loads(latest[0])
+            resolution = latest_decision.get("audit", {}).get("location_resolution", {})
+            if latest_decision.get("latitude") == event["latitude"] and latest_decision.get("longitude") == event["longitude"]:
+                result["location_method"] = resolution.get("method")
+                result["location_reason"] = resolution.get("reason")
         result["feed"] = []
         rows = conn.execute(
             "SELECT ep.role,p.id,COALESCE(ep.accepted_text,p.text) AS text,p.posted_at,p.edited_at,p.link,p.deleted_at,p.source_id,s.source_key,s.name AS source_name,s.username,s.timezone,COALESCE(ep.accepted_revision,p.revision) AS revision FROM event_posts ep JOIN posts p ON p.id=ep.post_id JOIN sources s ON s.id=p.source_id WHERE ep.event_id=? ORDER BY p.posted_at,p.id",
@@ -836,12 +884,8 @@ def _hide_unlocated_coordinates(event: dict) -> None:
 
 
 def stream_revision(path: Path | str = DB_PATH) -> str:
-    # A complete visible payload also captures source renames and expiry without writes.
-    events = list_events(path)
-    payload = [get_event(event["id"], path) for event in events]
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
-    ).hexdigest()
+    with connect(path) as conn:
+        return _stream_revision(conn, now())
 
 
 def pending_post_ids(path: Path | str = DB_PATH, hours: int = 168) -> list[int]:

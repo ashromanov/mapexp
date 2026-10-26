@@ -1,0 +1,66 @@
+name: mapexp
+services:
+  web:
+    image: ${MAPEXP_IMAGE:?Set the immutable release image}
+    init: true
+    command: ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    environment:
+      DATABASE_PATH: /app/data/mapexp.sqlite3
+      MEDIA_DIR: /app/media
+      CITY_NAME: ${CITY_NAME:-Пермь}
+      CITY_TIMEZONE: ${CITY_TIMEZONE:-Asia/Yekaterinburg}
+      CITY_LAT: ${CITY_LAT:-58.0105}
+      CITY_LON: ${CITY_LON:-56.2502}
+      CITY_ZOOM: ${CITY_ZOOM:-11}
+    ports:
+      - "127.0.0.1:8010:8000"
+    volumes:
+      - ${MAPEXP_ROOT:-/srv/mapexp}/data:/app/data
+      - ${MAPEXP_ROOT:-/srv/mapexp}/media:/app/media:ro
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 128
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/healthz',timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging: &logs
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  ingest:
+    image: ${MAPEXP_IMAGE:?Set the immutable release image}
+    init: true
+    command: ["python", "ingest.py", "--watch", "--recent-hours", "168"]
+    env_file: ${MAPEXP_ROOT:-/srv/mapexp}/.env
+    environment:
+      DATABASE_PATH: /app/data/mapexp.sqlite3
+      MEDIA_DIR: /app/media
+      TG_SESSION: /app/sessions/mapexp
+    volumes:
+      - ${MAPEXP_ROOT:-/srv/mapexp}/data:/app/data
+      - ${MAPEXP_ROOT:-/srv/mapexp}/media:/app/media
+      - ${MAPEXP_ROOT:-/srv/mapexp}/sessions:/app/sessions
+      - ${MAPEXP_ROOT:-/srv/mapexp}/sources.json:/app/sources.json:ro
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 128
+    stop_grace_period: 90s
+    restart: unless-stopped
+    depends_on:
+      web: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "from datetime import UTC,datetime; from storage import status_summary; s=status_summary(); h=s.get('heartbeat'); assert h and s.get('state')=='watching' and 0 <= (datetime.now(UTC)-datetime.fromisoformat(h)).total_seconds() < 75"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+    logging: *logs

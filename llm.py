@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Literal
-import re
 
 import httpx
 from openai import APIConnectionError, APIStatusError, OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
-from geocode import geocode
+from geocode import (
+    address_matches,
+    geocode,
+    house_number,
+    place_match_score,
+    place_tokens,
+)
 from settings import settings
 from storage import event_for_post, find_candidates, get_event, get_post, haversine_m
 
@@ -226,7 +232,8 @@ without losing important supported facts. The new post need not add new facts to
 Extract the place of THIS local incident from source context, including colloquial neighbourhood names,
 landmarks, intersections, roads and relative phrases like near a station. Normalize inflected names
 for location_query; a named landmark or neighbourhood is enough for an approximate area, no house
-number required. Never invent a house number or coordinates. location_evidence must be a short EXACT
+number required. Prefer retaining a plausible quoted place as district/area rather than dropping it
+because spelling, a colloquial name or exact position is uncertain. Never invent a house number or coordinates. location_evidence must be a short EXACT
 contiguous quote from source_text or accepted existing source evidence which connects the place to
 this incident. A location of a different incident, historical example, person's origin, signature,
 or crime in another city must not be used for the local incident. If ONLY a city is specified, use
@@ -357,8 +364,14 @@ def apply_geocoded_location(
             }
         )
     # A tentative address match marks its surroundings rather than an exact building.
-    if kind == "address" and confidence is not None and confidence < 0.9:
-        kind = "street"
+    if candidate.get("ambiguous_area"):
+        kind = "area"
+    elif kind == "address" and (
+        candidate.get("nearby_place")
+        or candidate.get("approximate_match")
+        or (confidence is not None and confidence < 0.9)
+    ):
+        kind = "poi" if candidate.get("address_match") else "street"
     extent_radius = candidate.get("radius_m", 0)
     if kind in {"street", "district", "area"}:
         # A road/river name without a section covers known matching geometry, not one OSM segment.
@@ -452,38 +465,132 @@ def location_candidates(
 
 
 def select_location(
-    answers: dict, locations: list[dict]
+    answers: dict,
+    locations: list[dict],
+    query: str = "",
+    evidence: str = "",
+    resolution: dict | None = None,
 ) -> tuple[int | None, float | None]:
-    answer = answers.get("location")
-    grounded = answers.get("location_grounded", {}).get("noul", 0)
-    if (
-        not answer
-        or answer["choice"] == "none"
-        or grounded < 0.75
-        or not confident(answer, 0.65, 0.6)
-    ):
-        return None, None
-    index = int(answer["choice"])
-    candidate = locations[index]
-    # Geographically distant alternatives cannot be represented by one local uncertainty circle.
-    for option, probability in answer["probabilities"].items():
-        if option != "none" and option != answer["choice"] and probability >= 0.15:
-            other = locations[int(option)]
-            distance = haversine_m(
-                candidate["latitude"],
-                candidate["longitude"],
-                other["latitude"],
-                other["longitude"],
-            )
-            if distance > max(3500, candidate.get("radius_m", 0)):
-                return None, None
-            candidate["radius_m"] = max(
-                candidate.get("radius_m", 0),
-                math.ceil(distance + other.get("radius_m", 0)),
-            )
-    return index, min(
-        grounded, answer["confidence"], answer["probabilities"][answer["choice"]]
+    """Recall-first: uncertainty expands an area instead of vetoing a plausible place."""
+    details = resolution if resolution is not None else {}
+    details.update(
+        policy="recall-v1",
+        method="unmapped",
+        reason="Нет подходящего результата геокодера",
     )
+    answer = answers.get("location") or {}
+    grounded = answers.get("location_grounded", {}).get("noul", 0)
+    if not locations or grounded < 0.35:
+        details["reason"] = (
+            "Недостаточно оснований связать место с этим происшествием"
+            if locations
+            else details["reason"]
+        )
+        return None, None
+    probabilities = answer.get("probabilities", {})
+    exact = [i for i, item in enumerate(locations) if address_matches(query, item)]
+    # A complete quoted address is stronger evidence than a model's confidence threshold.
+    quoted_address = bool(evidence) and place_tokens(query) <= place_tokens(evidence)
+    unique_address = (
+        bool(exact)
+        and quoted_address
+        and all(
+            haversine_m(
+                locations[exact[0]]["latitude"],
+                locations[exact[0]]["longitude"],
+                locations[i]["latitude"],
+                locations[i]["longitude"],
+            )
+            <= 300
+            for i in exact
+        )
+    )
+    choice = answer.get("choice", "none")
+    try:
+        selected = int(choice) if choice != "none" else None
+    except (ValueError, TypeError):
+        selected = None
+    if selected is not None and not 0 <= selected < len(locations):
+        selected = None
+    if unique_address:
+        index = selected if selected in exact else exact[0]
+        method, reason = (
+            "address_match",
+            "Улица и полный номер дома совпали с геокодером",
+        )
+    elif selected is not None and probabilities.get(str(selected), 0) >= 0.35:
+        index = selected
+        method, reason = (
+            "model_approximate",
+            "Выбран вероятный вариант; неопределённость показана областью",
+        )
+    else:
+        ranked = sorted(
+            range(len(locations)),
+            key=lambda i: place_match_score(query, locations[i]),
+            reverse=True,
+        )
+        partial_area = bool(
+            re.search(r"перекр[её]ст|пересечени|район(?:ы|ов|ах)", query, re.IGNORECASE)
+        )
+        threshold = 0.45 if partial_area else 0.6
+        if not query or place_match_score(query, locations[ranked[0]]) < threshold:
+            details["reason"] = "Нет варианта, соответствующего указанному месту"
+            return None, None
+        index = ranked[0]
+        method, reason = (
+            "text_approximate",
+            "Указано несколько мест; показана область найденного участка"
+            if partial_area
+            else "Найдено совпадение названия; координаты приблизительные",
+        )
+    candidate = locations[index]
+    confidence = min(
+        grounded, answer.get("confidence", 0), probabilities.get(str(index), 0)
+    )
+    candidate["address_match"] = unique_address
+    candidate["approximate_match"] = method != "address_match" and (
+        choice == "none" or confidence < 0.6 or bool(house_number(query))
+    )
+    candidate["nearby_place"] = bool(
+        re.search(
+            r"\b(?:рядом|возле|около|напротив|неподал[её]ку|у)\b",
+            evidence,
+            re.IGNORECASE,
+        )
+    )
+    # Cover plausible alternatives rather than discarding the entire event.
+    alternatives = set(exact if unique_address else []) | {
+        int(option)
+        for option, score in probabilities.items()
+        if option != "none"
+        and option.isdigit()
+        and score >= 0.15
+        and int(option) < len(locations)
+        and (not unique_address or int(option) in exact)
+    }
+    for other_index in alternatives - {index}:
+        other = locations[other_index]
+        distance = haversine_m(
+            candidate["latitude"],
+            candidate["longitude"],
+            other["latitude"],
+            other["longitude"],
+        )
+        candidate["radius_m"] = max(
+            candidate.get("radius_m", 0), math.ceil(distance + other.get("radius_m", 0))
+        )
+        if distance > 3500:
+            candidate["ambiguous_area"] = True
+            reason = "Несколько возможных мест; показана область неопределённости"
+    details.update(
+        method=method,
+        reason=reason,
+        selected=index,
+        model_confidence=answer.get("confidence", 0),
+        grounded=grounded,
+    )
+    return index, confidence
 
 
 def location_questions(locations: list[dict]) -> dict:
@@ -687,7 +794,14 @@ def _decide(post: dict, audit: list[dict]) -> EventDecision:
                 reason="Repaired incident is outside configured city scope",
                 audit={"revision": post["revision"], "calls": audit},
             )
-    selected, location_confidence = select_location(verified, locations)
+    location_resolution = {}
+    selected, location_confidence = select_location(
+        verified,
+        locations,
+        generated.location_query or "",
+        generated.location_evidence or "",
+        location_resolution,
+    )
     quoted_source = (
         verified["supported"]["noul"] < SUPPORT_THRESHOLDS[generated.severity]
     )
@@ -725,6 +839,7 @@ def _decide(post: dict, audit: list[dict]) -> EventDecision:
             "source_quote_fallback": quoted_source,
             "location_evidence": generated.location_evidence,
             "location_candidates": locations,
+            "location_resolution": location_resolution,
         },
     )
     return apply_geocoded_location(decision, locations, selected, location_confidence)

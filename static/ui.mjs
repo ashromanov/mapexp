@@ -40,8 +40,27 @@ export function uncertaintyRadius(e) {
     ? e.radius_m
     : 0;
 }
+function reportedPlace(e) {
+  const label = String(e.location_label || "").trim();
+  return e.location_precision !== "city" && label &&
+    !/^(место не уточнено|место неизвестно|адрес не указан)$/i.test(label);
+}
+export function locationNotice(e) {
+  if (mapped(e)) {
+    if (e.location_precision === "exact") return "";
+    const reason = e.location_reason ? e.location_reason + ". " : "";
+    return reason + "Пунктирный круг показывает приблизительную область, а маркер — её центр. Место события внутри круга не установлено точно.";
+  }
+  if (e.location_precision === "city")
+    return "В источнике указан только город. Более точное место пока не установлено; событие доступно без точки на карте.";
+  if (reportedPlace(e)) {
+    const reason = e.location_reason ? e.location_reason + ". " : "";
+    return reason + "Место указано в источнике, но его координаты пока не подтверждены. Адрес или ориентир сохранён в карточке; точки на карте пока нет.";
+  }
+  return "Место события пока не установлено. Событие доступно в ленте без точки на карте.";
+}
 export function locationSummary(e) {
-  if (!mapped(e)) return "Без точки на карте";
+  if (!mapped(e)) return reportedPlace(e) ? "Координаты не подтверждены" : "Без точки на карте";
   const label = precision[e.location_precision] || "Место приблизительно";
   const radius = uncertaintyRadius(e);
   if (!radius || e.location_precision === "exact") return label;

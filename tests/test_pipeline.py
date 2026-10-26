@@ -2,10 +2,11 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
+
 import llm
 import pipeline
 import storage
@@ -386,7 +387,7 @@ class DecisionTests(unittest.TestCase):
         }
         self.assertEqual(llm.select_location(answers, [place]), (None, None))
 
-    def test_geographically_conflicting_candidates_do_not_get_one_pin(self):
+    def test_geographically_conflicting_candidates_expand_an_approximate_area(self):
         answers = {
             "location_grounded": {"noul": 0.95},
             "location": {
@@ -399,7 +400,11 @@ class DecisionTests(unittest.TestCase):
             {"latitude": 58.0, "longitude": 56.2, "precision": "poi"},
             {"latitude": 58.2, "longitude": 56.4, "precision": "poi"},
         ]
-        self.assertEqual(llm.select_location(answers, places), (None, None))
+        self.assertEqual(llm.select_location(answers, places), (0, 0.7))
+        self.assertTrue(places[0]["ambiguous_area"])
+        self.assertGreater(places[0]["radius_m"], 20000)
+        places[0].pop("ambiguous_area")
+        places[0].pop("radius_m")
         places[1].update(latitude=58.001, longitude=56.201)
         self.assertEqual(llm.select_location(answers, places), (0, 0.7))
         self.assertGreater(places[0]["radius_m"], 100)

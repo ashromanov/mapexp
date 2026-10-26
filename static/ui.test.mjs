@@ -5,6 +5,7 @@ import {
   safeMedia,
   mapped,
   locationSummary,
+  locationNotice,
   locationConfidence,
   uncertaintyRadius,
   isStreamFresh,
@@ -71,4 +72,17 @@ assert.equal(
   countLabel(21, "сообщение", "сообщения", "сообщений"),
   "21 сообщение",
 );
+const knownAddress = {
+  location_label: "шоссе Космонавтов, 113А",
+  location_precision: "unknown", latitude: null, longitude: null,
+};
+assert.equal(mapped(knownAddress), false);
+assert.equal(locationSummary(knownAddress), "Координаты не подтверждены");
+assert.match(locationNotice(knownAddress), /Место указано в источнике/);
+assert.doesNotMatch(locationNotice(knownAddress), /нет достаточно конкретного места/);
+assert.equal(locationSummary({ ...knownAddress, location_label: null }), "Без точки на карте");
+assert.match(locationNotice({ ...knownAddress, location_label: null }), /пока не установлено/);
+assert.match(locationNotice({ ...knownAddress, location_precision: "city" }), /только город/);
+assert.equal(locationNotice({ ...area, location_precision: "exact" }), "");
+assert.match(locationNotice(area), /приблизительную область/);
 console.log("UI logic checks passed");
